@@ -20,6 +20,12 @@ import {
   getTierDistribution,
   getUntestedStepDriverMethods,
 } from './tools/coverage-oracle.js';
+import {
+  scaffoldPageObject,
+  scaffoldStd,
+  scaffoldStepDriver,
+  scaffoldTest,
+} from './tools/test-scaffolder.js';
 import { loadConfig } from './utils/config.js';
 import { ProjectScanner } from './utils/project-scanner.js';
 
@@ -196,6 +202,110 @@ server.tool(
   async () => {
     try {
       const result = await checkClusterHealth(config);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+// ─── Test Scaffolder Tools ─────────────────────────────────────────────
+
+server.tool(
+  'scaffold_test',
+  'Generate a .spec.ts test file skeleton following project conventions. Includes proper imports, test.describe, Allure registration, cleanup tracking, and ID(CNV-XXXXX) annotations. Returns the file path and content -- does NOT write to disk.',
+  {
+    feature: z.string().describe('Feature name in kebab-case or natural language (e.g. "storage-migration", "vm-snapshots")'),
+    tier: z.enum(['gating', 'tier1', 'tier2']).describe('Test tier'),
+    jira_ids: z.array(z.string()).optional().describe('Jira ticket IDs to annotate (e.g. ["CNV-78882", "CNV-83178"])'),
+    describe_name: z.string().optional().describe('Custom test.describe title. Defaults to PascalCase of feature.'),
+    test_names: z.array(z.string()).optional().describe('Custom test names. Defaults to one test per Jira ID.'),
+    tags: z.array(z.string()).optional().describe('Additional tags beyond the tier tag (e.g. ["@nonpriv", "@adminOnly"])'),
+    use_shared_resources: z.boolean().optional().describe('Generate read-only test pattern using sharedResources fixture (default: false)'),
+  },
+  async (params) => {
+    try {
+      const result = scaffoldTest({
+        feature: params.feature,
+        tier: params.tier,
+        jiraIds: params.jira_ids,
+        describeName: params.describe_name,
+        testNames: params.test_names,
+        tags: params.tags,
+        useSharedResources: params.use_shared_resources,
+      });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'scaffold_page_object',
+  'Generate a page object class extending BasePage or PageCommons with project conventions. Returns the file path and content -- does NOT write to disk.',
+  {
+    name: z.string().describe('Page object name (e.g. "storage-migration", "vm-snapshots"). "Page" suffix added automatically.'),
+    base_class: z.enum(['BasePage', 'PageCommons']).optional().describe('Base class to extend (default: PageCommons)'),
+    url_pattern: z.string().optional().describe('URL pattern for navigation methods. Use {namespace} as placeholder (e.g. "/k8s/ns/{namespace}/storage-migration")'),
+  },
+  async (params) => {
+    try {
+      const result = scaffoldPageObject({
+        name: params.name,
+        baseClass: params.base_class,
+        urlPattern: params.url_pattern,
+      });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'scaffold_step_driver',
+  'Generate a StepDriver class wired to a page object following the BasePageStepDriver pattern. Returns the file path and content -- does NOT write to disk.',
+  {
+    feature: z.string().describe('Feature name (e.g. "storage-migration"). Used for class name and file path.'),
+    page_object_name: z.string().optional().describe('Page object class name to bind. Defaults to PascalCase(feature) + "Page".'),
+  },
+  async (params) => {
+    try {
+      const result = scaffoldStepDriver({
+        feature: params.feature,
+        pageObjectName: params.page_object_name,
+      });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'scaffold_std',
+  'Generate a Software Test Description (STD) document from the project template. Returns the file path and content -- does NOT write to disk.',
+  {
+    feature: z.string().describe('Feature name (e.g. "storage-migration")'),
+    tier: z.enum(['gating', 'tier1', 'tier2']).describe('Test tier for the STD'),
+    jira_ids: z.array(z.string()).optional().describe('Related Jira ticket IDs'),
+    test_cases: z.array(z.object({
+      title: z.string().describe('Test case title'),
+      steps: z.array(z.object({
+        action: z.string().describe('Action to perform'),
+        expected: z.string().describe('Expected result'),
+      })).describe('Test steps'),
+    })).optional().describe('Test case definitions with steps'),
+  },
+  async (params) => {
+    try {
+      const result = scaffoldStd({
+        feature: params.feature,
+        tier: params.tier,
+        jiraIds: params.jira_ids,
+        testCases: params.test_cases,
+      });
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
     } catch (e: any) {
       return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };

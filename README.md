@@ -1,11 +1,12 @@
 # kubevirt-qe-mcp
 
-Custom [Model Context Protocol](https://modelcontextprotocol.io/) server for KubeVirt quality engineering. Gives AI agents structured access to two capabilities:
+Custom [Model Context Protocol](https://modelcontextprotocol.io/) server for KubeVirt quality engineering. Gives AI agents structured access to three capabilities:
 
 1. **Coverage Oracle** -- static analysis of the Playwright test codebase (specs, step drivers, page objects, Jira IDs, tier distribution)
 2. **Cluster State Inspector** -- live queries against an OpenShift / KubeVirt cluster (versions, VMs, namespaces, health checks)
+3. **Test Scaffolder** -- generates boilerplate following exact project conventions (spec files, page objects, step drivers, STD docs)
 
-Designed to complement the [Playwright MCP](https://github.com/playwright-community/playwright-mcp) (live browser interaction) by providing **project intelligence** -- answering "what do we cover?", "is the cluster healthy?", and "which tests touch this ticket?" without manual grep or `oc` commands.
+Designed to complement the [Playwright MCP](https://github.com/playwright-community/playwright-mcp) (live browser interaction) by providing **project intelligence** -- answering "what do we cover?", "is the cluster healthy?", and "scaffold a new test for this feature" without manual grep, `oc` commands, or copy-paste from existing files.
 
 ---
 
@@ -18,6 +19,7 @@ Designed to complement the [Playwright MCP](https://github.com/playwright-commun
 - [Tools Reference](#tools-reference)
   - [Coverage Oracle](#coverage-oracle)
   - [Cluster State Inspector](#cluster-state-inspector)
+  - [Test Scaffolder](#test-scaffolder)
 - [Usage Examples](#usage-examples)
 - [Debugging](#debugging)
   - [MCP Inspector (recommended)](#mcp-inspector-recommended)
@@ -210,6 +212,56 @@ Returns a `healthy` boolean and an array of checks with `ok` / `warning` / `erro
 
 ---
 
+### Test Scaffolder
+
+These tools generate boilerplate code and documentation following the exact conventions of the kubevirt-ui Playwright project. They return file path and content as JSON -- they do **not** write to disk, so the agent (or user) decides where and when to save.
+
+#### `scaffold_test`
+
+Generate a `.spec.ts` test file with proper imports, `test.describe` block, Allure registration, cleanup tracking, `ID(CNV-XXXXX)` annotations, and `test.step()` structure.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `feature` | string | yes | Feature name (e.g. `storage-migration`, `vm-snapshots`) |
+| `tier` | `gating` \| `tier1` \| `tier2` | yes | Test tier |
+| `jira_ids` | string[] | no | Jira IDs to annotate (e.g. `["CNV-78882"]`) |
+| `describe_name` | string | no | Custom `test.describe` title |
+| `test_names` | string[] | no | Custom test names (defaults to one per Jira ID) |
+| `tags` | string[] | no | Additional tags (e.g. `["@nonpriv", "@adminOnly"]`) |
+| `use_shared_resources` | boolean | no | Generate read-only pattern with `sharedResources` fixture |
+
+#### `scaffold_page_object`
+
+Generate a page object class extending `BasePage` or `PageCommons` with constructor, navigation methods, and placeholder locators.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | yes | Page name (e.g. `storage-migration`). `Page` suffix added automatically. |
+| `base_class` | `BasePage` \| `PageCommons` | no | Base class to extend (default: `PageCommons`) |
+| `url_pattern` | string | no | URL pattern with `{namespace}` placeholder for nav methods (e.g. `/k8s/ns/{namespace}/storage-migration`) |
+
+#### `scaffold_step_driver`
+
+Generate a StepDriver class extending `BasePageStepDriver`, wired to a page object, with example step method patterns.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `feature` | string | yes | Feature name for class name and file path |
+| `page_object_name` | string | no | Page object class to bind (defaults to `PascalCase(feature)Page`) |
+
+#### `scaffold_std`
+
+Generate a Software Test Description (STD) document from the project template with test case definitions, traceability matrix, and proper formatting.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `feature` | string | yes | Feature name |
+| `tier` | `gating` \| `tier1` \| `tier2` | yes | Test tier |
+| `jira_ids` | string[] | no | Related Jira ticket IDs |
+| `test_cases` | object[] | no | Test case definitions with `title` and `steps[{action, expected}]` |
+
+---
+
 ## Usage Examples
 
 Once integrated into Cursor, the agent can call these tools naturally during conversations:
@@ -228,6 +280,12 @@ The agent calls `cleanup_stale_namespaces` with `older_than_hours: 2` and delete
 
 **"Show me the tier breakdown"**
 The agent calls `get_tier_distribution` and reports: 38 files, 262 tests -- 42 gating, 135 tier1, 28 tier2, 57 fleet-virtualization-acm.
+
+**"Scaffold a tier1 test for storage migration with CNV-90001"**
+The agent calls `scaffold_test` and gets a complete `.spec.ts` file with the right imports, `test.describe`, Allure setup, cleanup tracking, and `test.step()` blocks -- ready to fill in.
+
+**"I need a page object and step driver for a new storage migration page"**
+The agent calls `scaffold_page_object` with the URL pattern, then `scaffold_step_driver` -- both are generated with correct inheritance, naming, and constructor patterns matching the existing codebase.
 
 ---
 
@@ -255,7 +313,7 @@ CLIENT_PORT=8080 SERVER_PORT=9000 \
 
 Open `http://localhost:6274` in your browser. The Inspector provides:
 
-- **Tools tab** -- browse all 12 tools, fill in parameters, execute them, and see JSON responses
+- **Tools tab** -- browse all 16 tools, fill in parameters, execute them, and see JSON responses
 - **Notifications pane** -- view server logs and stderr output
 - **Protocol view** -- inspect raw JSON-RPC messages between client and server
 
@@ -350,12 +408,14 @@ node dist/index.js 2>server.log
 ```
 src/
 ├── index.ts                      # MCP server entry point
-│                                   Registers 12 tools, starts stdio transport
+│                                   Registers 16 tools, starts stdio transport
 ├── tools/
 │   ├── coverage-oracle.ts        # Static analysis of the playwright codebase
 │   │                               Parses spec files, step drivers, page objects
-│   └── cluster-inspector.ts      # Live K8s/KubeVirt cluster queries
-│                                   Uses @kubernetes/client-node
+│   ├── cluster-inspector.ts      # Live K8s/KubeVirt cluster queries
+│   │                               Uses @kubernetes/client-node
+│   └── test-scaffolder.ts        # Code generation following project conventions
+│                                   Specs, page objects, step drivers, STD docs
 └── utils/
     ├── config.ts                 # Environment variable loading, path resolution
     └── project-scanner.ts        # File system walker + TypeScript parser
@@ -368,12 +428,13 @@ src/
 Cursor Agent
     │
     ├─ tools/call "get_coverage_for_feature"
-    │       │
     │       └─► ProjectScanner ─► walks playwright/ ─► returns structured data
     │
-    └─ tools/call "check_cluster_health"
-            │
-            └─► @kubernetes/client-node ─► K8s API ─► returns health checks
+    ├─ tools/call "check_cluster_health"
+    │       └─► @kubernetes/client-node ─► K8s API ─► returns health checks
+    │
+    └─ tools/call "scaffold_test"
+            └─► test-scaffolder ─► generates code from conventions ─► returns content
 ```
 
 The Coverage Oracle tools cache results in memory after the first scan. Call `invalidate_cache` to reset. The Cluster State Inspector creates a single Kubernetes client per process lifetime, reset alongside the cache.
