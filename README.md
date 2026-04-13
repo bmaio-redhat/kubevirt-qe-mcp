@@ -5,8 +5,9 @@ Custom [Model Context Protocol](https://modelcontextprotocol.io/) server for Kub
 1. **Coverage Oracle** -- static analysis of the Playwright test codebase (specs, step drivers, page objects, Jira IDs, tier distribution)
 2. **Cluster State Inspector** -- live queries against an OpenShift / KubeVirt cluster (versions, VMs, namespaces, health checks)
 3. **Test Scaffolder** -- generates boilerplate following exact project conventions (spec files, page objects, step drivers, STD docs)
+4. **GitHub Integration** -- PR details, file-to-test-coverage cross-referencing, comments, and search via `gh` CLI
 
-Designed to complement the [Playwright MCP](https://github.com/playwright-community/playwright-mcp) (live browser interaction) by providing **project intelligence** -- answering "what do we cover?", "is the cluster healthy?", and "scaffold a new test for this feature" without manual grep, `oc` commands, or copy-paste from existing files.
+Designed to complement the [Playwright MCP](https://github.com/playwright-community/playwright-mcp) (live browser interaction) by providing **project intelligence** -- answering "what do we cover?", "is the cluster healthy?", "scaffold a new test for this feature", and "which tests are impacted by this PR?" without manual grep, `oc` commands, or chaining multiple `gh` calls.
 
 ---
 
@@ -20,6 +21,7 @@ Designed to complement the [Playwright MCP](https://github.com/playwright-commun
   - [Coverage Oracle](#coverage-oracle)
   - [Cluster State Inspector](#cluster-state-inspector)
   - [Test Scaffolder](#test-scaffolder)
+  - [GitHub Integration](#github-integration)
 - [Usage Examples](#usage-examples)
 - [Debugging](#debugging)
   - [MCP Inspector (recommended)](#mcp-inspector-recommended)
@@ -36,6 +38,7 @@ Designed to complement the [Playwright MCP](https://github.com/playwright-commun
 - **npm** >= 9.x
 - Access to the [kubevirt-ui](https://github.com/kubevirt-ui/kubevirt-plugin) test repository (for Coverage Oracle tools)
 - A valid kubeconfig pointing to an OpenShift cluster (for Cluster State Inspector tools -- optional)
+- **`gh` CLI** authenticated with GitHub (for GitHub Integration tools -- optional)
 
 ## Installation
 
@@ -58,6 +61,7 @@ All configuration is through environment variables. Every variable is optional w
 | `KUBEVIRT_PROJECT_ROOT` | Absolute path to the kubevirt-ui repository root | `~/Developer/Projects/kubevirt-ui` |
 | `KUBECONFIG` | Path to kubeconfig file for cluster access | `<project>/playwright/.kubeconfigs/test-config` |
 | `CLUSTER_URL` | OpenShift API URL (overrides kubeconfig server) | Read from kubeconfig |
+| `GITHUB_REPO` | Default GitHub repo in `owner/repo` format | None (must pass per-call or set this) |
 
 ### Cluster access
 
@@ -80,7 +84,8 @@ Add the server to your project's `.cursor/mcp.json`:
       "command": "node",
       "args": ["/absolute/path/to/kubevirt-qe-mcp/dist/index.js"],
       "env": {
-        "KUBEVIRT_PROJECT_ROOT": "/absolute/path/to/kubevirt-ui"
+        "KUBEVIRT_PROJECT_ROOT": "/absolute/path/to/kubevirt-ui",
+        "GITHUB_REPO": "kubevirt-ui/kubevirt-plugin"
       }
     }
   }
@@ -102,7 +107,8 @@ To use it alongside the Playwright MCP:
       "command": "node",
       "args": ["/absolute/path/to/kubevirt-qe-mcp/dist/index.js"],
       "env": {
-        "KUBEVIRT_PROJECT_ROOT": "/absolute/path/to/kubevirt-ui"
+        "KUBEVIRT_PROJECT_ROOT": "/absolute/path/to/kubevirt-ui",
+        "GITHUB_REPO": "kubevirt-ui/kubevirt-plugin"
       }
     }
   }
@@ -262,6 +268,64 @@ Generate a Software Test Description (STD) document from the project template wi
 
 ---
 
+### GitHub Integration
+
+These tools use the `gh` CLI to interact with GitHub repositories. They require `gh` to be installed and authenticated (`gh auth login`). Every tool accepts an optional `repo` parameter; if omitted, it falls back to the `GITHUB_REPO` environment variable.
+
+#### `get_pr_details`
+
+Get comprehensive PR information in a single call: metadata (title, author, state, review decision, draft status), files changed with diff stats, and CI check status. Replaces chaining `gh pr view`, `gh pr diff --stat`, and `gh pr checks`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `pr_number` | number | yes | Pull request number |
+| `repo` | string | no | GitHub repo (`owner/repo`). Falls back to `GITHUB_REPO` env var. |
+
+#### `get_pr_files_coverage`
+
+The key cross-referencing tool. Takes a PR number, fetches its changed files, then cross-references them against the Playwright test codebase to identify:
+- Which specs, page objects, step drivers, and other source files are changed
+- Which tests are **impacted** by page object or step driver changes (transitive analysis)
+
+This tells you "PR #123 changes `checkups-page.ts`, which is used by `CheckupsStepDriver`, which is called by `tests/tier1/checkups/checkups.spec.ts`" -- in one call.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `pr_number` | number | yes | Pull request number |
+| `repo` | string | no | GitHub repo |
+
+#### `get_pr_comments`
+
+Get all review comments (inline code comments on specific lines) and issue comments (general PR discussion) for a PR.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `pr_number` | number | yes | Pull request number |
+| `repo` | string | no | GitHub repo |
+
+#### `list_open_prs`
+
+List open pull requests with optional filters. Returns title, author, branch, review status, draft flag, labels, and diff stats.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | no | GitHub repo |
+| `author` | string | no | Filter by GitHub username |
+| `label` | string | no | Filter by label name |
+| `limit` | number | no | Max results (default: 20) |
+
+#### `search_prs`
+
+Search pull requests by keyword across title, body, and comments. Supports GitHub search qualifiers (`is:merged`, `label:bug`, `author:username`). Returns PRs in any state.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | yes | Search query with optional GitHub qualifiers |
+| `repo` | string | no | GitHub repo |
+| `limit` | number | no | Max results (default: 20) |
+
+---
+
 ## Usage Examples
 
 Once integrated into Cursor, the agent can call these tools naturally during conversations:
@@ -286,6 +350,15 @@ The agent calls `scaffold_test` and gets a complete `.spec.ts` file with the rig
 
 **"I need a page object and step driver for a new storage migration page"**
 The agent calls `scaffold_page_object` with the URL pattern, then `scaffold_step_driver` -- both are generated with correct inheritance, naming, and constructor patterns matching the existing codebase.
+
+**"What tests are affected by PR #3764?"**
+The agent calls `get_pr_files_coverage` and gets back: 2 page objects changed, 1 step driver changed, 4 spec files impacted through transitive dependencies -- all in one call.
+
+**"Show me the review comments on PR #3766"**
+The agent calls `get_pr_comments` and returns inline code review comments with file paths and line numbers, plus general discussion comments.
+
+**"List open PRs on kubevirt-plugin by upalatucci"**
+The agent calls `list_open_prs` with `author: "upalatucci"` and returns PR numbers, titles, branches, review status, and diff stats.
 
 ---
 
@@ -313,7 +386,7 @@ CLIENT_PORT=8080 SERVER_PORT=9000 \
 
 Open `http://localhost:6274` in your browser. The Inspector provides:
 
-- **Tools tab** -- browse all 16 tools, fill in parameters, execute them, and see JSON responses
+- **Tools tab** -- browse all 21 tools, fill in parameters, execute them, and see JSON responses
 - **Notifications pane** -- view server logs and stderr output
 - **Protocol view** -- inspect raw JSON-RPC messages between client and server
 
@@ -388,6 +461,8 @@ printf '%s\n%s\n' \
 | Stale results after editing test files | Scanner cache | Call `invalidate_cache` to force a re-scan |
 | Server not appearing in Cursor | `mcp.json` syntax error or wrong path | Validate JSON syntax; use absolute paths in `args` |
 | Inspector can't connect | Port conflict | Set `CLIENT_PORT` / `SERVER_PORT` to avoid conflicts |
+| GitHub tools return "gh command failed" | `gh` not installed or not authenticated | Install `gh` and run `gh auth login` |
+| GitHub tools return "No repository specified" | Missing repo parameter | Pass `repo` parameter or set `GITHUB_REPO` env var |
 
 #### Enabling server-side debug logging
 
@@ -408,14 +483,16 @@ node dist/index.js 2>server.log
 ```
 src/
 ├── index.ts                      # MCP server entry point
-│                                   Registers 16 tools, starts stdio transport
+│                                   Registers 21 tools, starts stdio transport
 ├── tools/
 │   ├── coverage-oracle.ts        # Static analysis of the playwright codebase
 │   │                               Parses spec files, step drivers, page objects
 │   ├── cluster-inspector.ts      # Live K8s/KubeVirt cluster queries
 │   │                               Uses @kubernetes/client-node
-│   └── test-scaffolder.ts        # Code generation following project conventions
-│                                   Specs, page objects, step drivers, STD docs
+│   ├── test-scaffolder.ts        # Code generation following project conventions
+│   │                               Specs, page objects, step drivers, STD docs
+│   └── github-integration.ts     # GitHub PR tools via gh CLI
+│                                   Details, coverage cross-ref, comments, search
 └── utils/
     ├── config.ts                 # Environment variable loading, path resolution
     └── project-scanner.ts        # File system walker + TypeScript parser
@@ -433,8 +510,13 @@ Cursor Agent
     ├─ tools/call "check_cluster_health"
     │       └─► @kubernetes/client-node ─► K8s API ─► returns health checks
     │
-    └─ tools/call "scaffold_test"
-            └─► test-scaffolder ─► generates code from conventions ─► returns content
+    ├─ tools/call "scaffold_test"
+    │       └─► test-scaffolder ─► generates code from conventions ─► returns content
+    │
+    └─ tools/call "get_pr_files_coverage"
+            └─► gh CLI ─► GitHub API ─► files changed
+                    │
+                    └─► ProjectScanner ─► cross-ref with test coverage ─► impact report
 ```
 
 The Coverage Oracle tools cache results in memory after the first scan. Call `invalidate_cache` to reset. The Cluster State Inspector creates a single Kubernetes client per process lifetime, reset alongside the cache.

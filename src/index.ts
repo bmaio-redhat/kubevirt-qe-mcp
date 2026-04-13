@@ -21,6 +21,13 @@ import {
   getUntestedStepDriverMethods,
 } from './tools/coverage-oracle.js';
 import {
+  getPrComments,
+  getPrDetails,
+  getPrFilesWithCoverage,
+  listOpenPrs,
+  searchPrs,
+} from './tools/github-integration.js';
+import {
   scaffoldPageObject,
   scaffoldStd,
   scaffoldStepDriver,
@@ -306,6 +313,98 @@ server.tool(
         jiraIds: params.jira_ids,
         testCases: params.test_cases,
       });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+// ─── GitHub Integration Tools ─────────────────────────────────────────
+
+const REPO_PARAM = z.string().optional().describe('GitHub repo in owner/repo format (e.g. "kubevirt-ui/kubevirt-plugin"). Falls back to GITHUB_REPO env var.');
+
+server.tool(
+  'get_pr_details',
+  'Get comprehensive PR information in a single call: metadata, files changed, CI check status. Replaces multiple gh commands.',
+  {
+    pr_number: z.number().describe('Pull request number'),
+    repo: REPO_PARAM,
+  },
+  async ({ pr_number, repo }) => {
+    try {
+      const result = await getPrDetails(config, pr_number, repo);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'get_pr_files_coverage',
+  'Cross-reference a PR\'s changed files with test coverage. Shows which playwright specs, page objects, and step drivers are changed, and which tests are impacted by those changes. The key tool for PR review.',
+  {
+    pr_number: z.number().describe('Pull request number'),
+    repo: REPO_PARAM,
+  },
+  async ({ pr_number, repo }) => {
+    try {
+      const result = await getPrFilesWithCoverage(config, scanner, pr_number, repo);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'get_pr_comments',
+  'Get all review comments (inline code comments) and issue comments (general discussion) for a PR.',
+  {
+    pr_number: z.number().describe('Pull request number'),
+    repo: REPO_PARAM,
+  },
+  async ({ pr_number, repo }) => {
+    try {
+      const result = await getPrComments(config, pr_number, repo);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'list_open_prs',
+  'List open pull requests with optional filters for author and label. Returns title, branch, review status, and diff stats.',
+  {
+    repo: REPO_PARAM,
+    author: z.string().optional().describe('Filter by PR author (GitHub username)'),
+    label: z.string().optional().describe('Filter by label name'),
+    limit: z.number().optional().describe('Max results to return (default: 20)'),
+  },
+  async ({ repo, author, label, limit }) => {
+    try {
+      const result = await listOpenPrs(config, repo, author, label, limit);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'search_prs',
+  'Search pull requests by keyword across title, body, and comments. Supports GitHub search qualifiers. Returns PRs in any state (open, closed, merged).',
+  {
+    query: z.string().describe('Search query (supports GitHub search qualifiers like "is:merged", "label:bug", keywords)'),
+    repo: REPO_PARAM,
+    limit: z.number().optional().describe('Max results to return (default: 20)'),
+  },
+  async ({ query, repo, limit }) => {
+    try {
+      const result = await searchPrs(config, query, repo, limit);
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
     } catch (e: any) {
       return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };

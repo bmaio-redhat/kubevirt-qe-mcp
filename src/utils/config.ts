@@ -10,6 +10,7 @@ export interface McpConfig {
   docsDir: string;
   kubeConfigPath?: string;
   clusterUrl?: string;
+  githubRepo?: string;
 }
 
 export function loadConfig(): McpConfig {
@@ -29,5 +30,6 @@ export function loadConfig(): McpConfig {
     kubeConfigPath: process.env.KUBECONFIG
       ?? path.join(playwrightDir, '.kubeconfigs', 'test-config'),
     clusterUrl: process.env.CLUSTER_URL,
+    githubRepo: process.env.GITHUB_REPO,
   };
 }
