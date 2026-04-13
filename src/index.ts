@@ -27,6 +27,7 @@ import {
   listOpenPrs,
   searchPrs,
 } from './tools/github-integration.js';
+import { getTestResults, runTests } from './tools/test-runner.js';
 import {
   scaffoldPageObject,
   scaffoldStd,
@@ -313,6 +314,64 @@ server.tool(
         jiraIds: params.jira_ids,
         testCases: params.test_cases,
       });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+// ─── Test Runner Tools ────────────────────────────────────────────────
+
+server.tool(
+  'run_tests',
+  'Execute Playwright tests with structured parameters. Builds the correct `yarn test-playwright` command from the inputs. Use dryRun to preview the command without executing. Runs from the project root.',
+  {
+    file: z.string().optional().describe('Test file or glob to run (e.g. "checkups.spec.ts", "tier1/checkups/checkups.spec.ts", or full path). Omit to run all tests.'),
+    grep: z.string().optional().describe('Tag or name filter, passed to --grep (e.g. "@tier1", "@smoke", "(?=.*@tier1)(?=.*@nonpriv)" for AND, "@tier1|@filter" for OR)'),
+    grep_invert: z.string().optional().describe('Exclude tests matching this pattern (passed to --grep-invert)'),
+    workers: z.number().optional().describe('Number of parallel workers (e.g. 1 for serial, 4 for parallel). Omit to use config default.'),
+    headed: z.boolean().optional().describe('Run in headed mode (visible browser). Default: false (headless).'),
+    debug: z.boolean().optional().describe('Enable debug mode (DEBUG=1): headed browser, Allure skipped, minimal setup. Default: false.'),
+    ui: z.boolean().optional().describe('Launch Playwright UI mode for interactive test selection and debugging.'),
+    shard: z.string().optional().describe('Shard specification (e.g. "1/4" to run shard 1 of 4)'),
+    retries: z.number().optional().describe('Number of retries for failed tests. Omit to use config default.'),
+    timeout: z.number().optional().describe('Test timeout in milliseconds. Omit to use config default (480000ms).'),
+    skip_cleanup: z.boolean().optional().describe('Skip test resource cleanup (SKIP_TEST_CLEANUP=true). Useful for debugging leftover resources.'),
+    dry_run: z.boolean().optional().describe('If true, returns the command without executing it. Great for verification before running.'),
+  },
+  async (params) => {
+    try {
+      const result = await runTests(config, {
+        file: params.file,
+        grep: params.grep,
+        grepInvert: params.grep_invert,
+        workers: params.workers,
+        headed: params.headed,
+        debug: params.debug,
+        ui: params.ui,
+        shard: params.shard,
+        retries: params.retries,
+        timeout: params.timeout,
+        skipCleanup: params.skip_cleanup,
+        dryRun: params.dry_run,
+      });
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (e: any) {
+      return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'get_test_results',
+  'Parse the latest test results from JUnit XML or Allure result files. Returns pass/fail counts, failed test names with error messages, and execution time.',
+  {
+    source: z.enum(['junit', 'allure']).optional().describe('Which result source to parse. Omit to auto-detect (prefers JUnit if available).'),
+  },
+  async ({ source }) => {
+    try {
+      const result = await getTestResults(config, source);
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
     } catch (e: any) {
       return { content: [{ type: 'text' as const, text: `Error: ${e.message}` }], isError: true };

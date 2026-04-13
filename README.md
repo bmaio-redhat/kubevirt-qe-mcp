@@ -5,7 +5,8 @@ Custom [Model Context Protocol](https://modelcontextprotocol.io/) server for Kub
 1. **Coverage Oracle** -- static analysis of the Playwright test codebase (specs, step drivers, page objects, Jira IDs, tier distribution)
 2. **Cluster State Inspector** -- live queries against an OpenShift / KubeVirt cluster (versions, VMs, namespaces, health checks)
 3. **Test Scaffolder** -- generates boilerplate following exact project conventions (spec files, page objects, step drivers, STD docs)
-4. **GitHub Integration** -- PR details, file-to-test-coverage cross-referencing, comments, and search via `gh` CLI
+4. **Test Runner** -- structured test execution and result parsing, replacing manual command construction
+5. **GitHub Integration** -- PR details, file-to-test-coverage cross-referencing, comments, and search via `gh` CLI
 
 Designed to complement the [Playwright MCP](https://github.com/playwright-community/playwright-mcp) (live browser interaction) by providing **project intelligence** -- answering "what do we cover?", "is the cluster healthy?", "scaffold a new test for this feature", and "which tests are impacted by this PR?" without manual grep, `oc` commands, or chaining multiple `gh` calls.
 
@@ -21,6 +22,7 @@ Designed to complement the [Playwright MCP](https://github.com/playwright-commun
   - [Coverage Oracle](#coverage-oracle)
   - [Cluster State Inspector](#cluster-state-inspector)
   - [Test Scaffolder](#test-scaffolder)
+  - [Test Runner](#test-runner)
   - [GitHub Integration](#github-integration)
 - [Usage Examples](#usage-examples)
 - [Debugging](#debugging)
@@ -268,6 +270,48 @@ Generate a Software Test Description (STD) document from the project template wi
 
 ---
 
+### Test Runner
+
+Execute Playwright tests and parse results without manually constructing commands. The agent gets structured parameters instead of guessing at the `yarn test-playwright` incantation.
+
+#### `run_tests`
+
+Builds and executes a `yarn test-playwright` command from structured inputs. Supports all common options: file targeting, tag filtering (single, AND, OR), worker count, headed/debug/UI mode, sharding, retries, and cleanup control. Use `dry_run: true` to preview the command before running.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file` | string | no | Test file or glob (e.g. `"checkups.spec.ts"`, `"tier1/checkups/checkups.spec.ts"`). Omit for all tests. |
+| `grep` | string | no | Tag/name filter: `"@tier1"`, `"@tier1\|@filter"` (OR), `"(?=.*@tier1)(?=.*@nonpriv)"` (AND) |
+| `grep_invert` | string | no | Exclude tests matching this pattern |
+| `workers` | number | no | Parallel workers (e.g. `1` for serial, `4` for parallel) |
+| `headed` | boolean | no | Run with visible browser |
+| `debug` | boolean | no | Debug mode (`DEBUG=1`): headed, no Allure, minimal setup |
+| `ui` | boolean | no | Launch Playwright interactive UI mode |
+| `shard` | string | no | Shard spec (e.g. `"1/4"`) |
+| `retries` | number | no | Retry count for failed tests |
+| `timeout` | number | no | Test timeout in milliseconds |
+| `skip_cleanup` | boolean | no | Skip resource cleanup (`SKIP_TEST_CLEANUP=true`) |
+| `dry_run` | boolean | no | Preview the command without executing |
+
+**Examples of generated commands:**
+
+| Agent request | Generated command |
+|---|---|
+| "run tier1 tests with 3 workers" | `yarn test-playwright --grep "@tier1" --workers=3` |
+| "run checkups spec in debug mode" | `DEBUG=1 yarn test-playwright playwright/tests/**/checkups.spec.ts --workers=1` |
+| "run non-priv tier1 tests headed" | `yarn test-playwright --grep "(?=.*@tier1)(?=.*@nonpriv)" --headed` |
+| "shard 2 of 4 for all tests" | `yarn test-playwright --shard=2/4` |
+
+#### `get_test_results`
+
+Parses the latest test results from JUnit XML (`junit-results/junit.xml`) or Allure result files (`allure-results/`). Returns pass/fail/skip counts, failed test names with error messages, and execution time.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source` | `"junit"` \| `"allure"` | no | Result source to parse. Auto-detects if omitted. |
+
+---
+
 ### GitHub Integration
 
 These tools use the `gh` CLI to interact with GitHub repositories. They require `gh` to be installed and authenticated (`gh auth login`). Every tool accepts an optional `repo` parameter; if omitted, it falls back to the `GITHUB_REPO` environment variable.
@@ -351,6 +395,12 @@ The agent calls `scaffold_test` and gets a complete `.spec.ts` file with the rig
 **"I need a page object and step driver for a new storage migration page"**
 The agent calls `scaffold_page_object` with the URL pattern, then `scaffold_step_driver` -- both are generated with correct inheritance, naming, and constructor patterns matching the existing codebase.
 
+**"Run the checkups tests in debug mode with 1 worker"**
+The agent calls `run_tests` with `file: "checkups.spec.ts"`, `debug: true`, `workers: 1` -- builds `DEBUG=1 yarn test-playwright playwright/tests/**/checkups.spec.ts --workers=1` and returns pass/fail summary.
+
+**"What failed in the last test run?"**
+The agent calls `get_test_results` and returns a structured breakdown: 3 passed, 1 failed (`"checkups > CNV-78882: verify checkup wizard"` with error message), 0 skipped.
+
 **"What tests are affected by PR #3764?"**
 The agent calls `get_pr_files_coverage` and gets back: 2 page objects changed, 1 step driver changed, 4 spec files impacted through transitive dependencies -- all in one call.
 
@@ -386,7 +436,7 @@ CLIENT_PORT=8080 SERVER_PORT=9000 \
 
 Open `http://localhost:6274` in your browser. The Inspector provides:
 
-- **Tools tab** -- browse all 21 tools, fill in parameters, execute them, and see JSON responses
+- **Tools tab** -- browse all 23 tools, fill in parameters, execute them, and see JSON responses
 - **Notifications pane** -- view server logs and stderr output
 - **Protocol view** -- inspect raw JSON-RPC messages between client and server
 
@@ -483,7 +533,7 @@ node dist/index.js 2>server.log
 ```
 src/
 ├── index.ts                      # MCP server entry point
-│                                   Registers 21 tools, starts stdio transport
+│                                   Registers 23 tools, starts stdio transport
 ├── tools/
 │   ├── coverage-oracle.ts        # Static analysis of the playwright codebase
 │   │                               Parses spec files, step drivers, page objects
@@ -491,6 +541,8 @@ src/
 │   │                               Uses @kubernetes/client-node
 │   ├── test-scaffolder.ts        # Code generation following project conventions
 │   │                               Specs, page objects, step drivers, STD docs
+│   ├── test-runner.ts             # Test execution and result parsing
+│   │                               Builds commands, captures output, parses JUnit/Allure
 │   └── github-integration.ts     # GitHub PR tools via gh CLI
 │                                   Details, coverage cross-ref, comments, search
 └── utils/
@@ -512,6 +564,9 @@ Cursor Agent
     │
     ├─ tools/call "scaffold_test"
     │       └─► test-scaffolder ─► generates code from conventions ─► returns content
+    │
+    ├─ tools/call "run_tests"
+    │       └─► builds command ─► child_process.exec ─► yarn test-playwright ─► summary
     │
     └─ tools/call "get_pr_files_coverage"
             └─► gh CLI ─► GitHub API ─► files changed
